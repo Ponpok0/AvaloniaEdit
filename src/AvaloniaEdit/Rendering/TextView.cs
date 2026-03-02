@@ -929,7 +929,8 @@ namespace AvaloniaEdit.Rendering
                     // scrolling to the very bottom.
                     var minVisibleDocumentHeight = DefaultLineHeight;
                     // increase the extend height to allow scrolling below the document
-                    extraHeightToAllowScrollBelowDocument = desiredHeight - minVisibleDocumentHeight;
+                    extraHeightToAllowScrollBelowDocument =
+                        (desiredHeight - minVisibleDocumentHeight) * Math.Clamp(options.ScrollBelowDocumentRatio, 0.0, 1.0);
                 }
             }
 

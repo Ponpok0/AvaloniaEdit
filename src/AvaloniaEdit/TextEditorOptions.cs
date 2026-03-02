@@ -465,6 +465,29 @@ namespace AvaloniaEdit
             }
         }
 
+        private double _scrollBelowDocumentRatio = 1.0;
+
+        /// <summary>
+        /// Gets/Sets the ratio of viewport height used as extra scroll space below the document
+        /// when <see cref="AllowScrollBelowDocument"/> is true.
+        /// 0.0 = no extra space, 1.0 = original behavior (viewport - DefaultLineHeight).
+        /// The default value is 1.0 for backwards compatibility.
+        /// </summary>
+        [DefaultValue(1.0)]
+        public virtual double ScrollBelowDocumentRatio
+        {
+            get => _scrollBelowDocumentRatio;
+            set
+            {
+                var clamped = Math.Clamp(value, 0.0, 1.0);
+                if (_scrollBelowDocumentRatio != clamped)
+                {
+                    _scrollBelowDocumentRatio = clamped;
+                    OnPropertyChanged(nameof(ScrollBelowDocumentRatio));
+                }
+            }
+        }
+
         private double _wordWrapIndentation;
 
         /// <summary>
