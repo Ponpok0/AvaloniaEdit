@@ -192,11 +192,18 @@ namespace AvaloniaEdit.Rendering
 		{
 			TextLine lastTextLine = visualLine.TextLines.Last();
 			Vector scrollOffset = textView.ScrollOffset;
+			var defaultLineHeight = textView.DefaultLineHeight;
 
 			for (int i = 0; i < visualLine.TextLines.Count; i++) {
 				TextLine line = visualLine.TextLines[i];
+
+				// InlineObjectElement スペーサーによる異常に高い TextLine はスキップ
+				// （選択・検索ハイライト等の矩形がスペーサー領域に侵入するのを防止）
+				if (line.Height > defaultLineHeight * 1.5)
+					continue;
+
 				double y = visualLine.GetTextLineVisualYPosition(line, VisualYPosition.LineTop);
-                double lineHeight = Math.Max(line.Height, textView.DefaultLineHeight);
+				double lineHeight = Math.Max(line.Height, defaultLineHeight);
 				int visualStartCol = visualLine.GetTextLineVisualStartColumn(line);
 				int visualEndCol = visualStartCol + line.Length;
 				if (line == lastTextLine)
