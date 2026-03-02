@@ -40,6 +40,9 @@ namespace AvaloniaEdit.Document
         /// during Undo events
         internal int State { get; set; } = StateListen;
 
+        /// <summary>true の間、ドキュメント変更を Undo スタックに記録しない（IME preedit 用）。</summary>
+        internal bool SuppressRecording { get; set; }
+
         private readonly Deque<IUndoableOperation> _undostack = new Deque<IUndoableOperation>();
         private readonly Deque<IUndoableOperation> _redostack = new Deque<IUndoableOperation>();
         private int _sizeLimit = int.MaxValue;
@@ -450,6 +453,7 @@ namespace AvaloniaEdit.Document
 
         internal void Push(TextDocument document, DocumentChangeEventArgs e)
         {
+            if (SuppressRecording) return;
             if (State == StatePlayback)
                 throw new InvalidOperationException("Document changes during undo/redo operations are not allowed.");
             if (State == StatePlaybackModifyDocument)
