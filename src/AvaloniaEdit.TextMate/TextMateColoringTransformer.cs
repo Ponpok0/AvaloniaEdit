@@ -4,8 +4,6 @@ using System.Collections.Generic;
 
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
-using Avalonia.Threading;
-
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
 using TextMateSharp.Grammars;
@@ -26,10 +24,6 @@ namespace AvaloniaEdit.TextMate
         private TextView _textView;
         private Action<Exception> _exceptionHandler;
 
-        private volatile bool _areVisualLinesValid = false;
-        private volatile int _firstVisibleLineIndex = -1;
-        private volatile int _lastVisibleLineIndex = -1;
-
         private readonly Dictionary<int, IBrush> _brushes;
 
         public TextMateColoringTransformer(
@@ -41,12 +35,10 @@ namespace AvaloniaEdit.TextMate
             _exceptionHandler = exceptionHandler;
 
             _brushes = new Dictionary<int, IBrush>();
-            _textView.VisualLinesChanged += TextView_VisualLinesChanged;
         }
 
         public void SetModel(TextDocument document, TMModel model)
         {
-            _areVisualLinesValid = false;
             _document = document;
             _model = model;
 
@@ -56,26 +48,8 @@ namespace AvaloniaEdit.TextMate
             }
         }
 
-        private void TextView_VisualLinesChanged(object sender, EventArgs e)
-        {
-            try
-            {
-                if (!_textView.VisualLinesValid || _textView.VisualLines.Count == 0)
-                    return;
-
-                _areVisualLinesValid = true;
-                _firstVisibleLineIndex = _textView.VisualLines[0].FirstDocumentLine.LineNumber - 1;
-                _lastVisibleLineIndex = _textView.VisualLines[_textView.VisualLines.Count - 1].LastDocumentLine.LineNumber - 1;
-            }
-            catch (Exception ex)
-            {
-                _exceptionHandler?.Invoke(ex);
-            }
-        }
-
         public void Dispose()
         {
-            _textView.VisualLinesChanged -= TextView_VisualLinesChanged;
             _brushes.Clear();
         }
 
@@ -113,17 +87,25 @@ namespace AvaloniaEdit.TextMate
                     return;
 
                 int lineNumber = line.LineNumber;
+                int lineIndex = lineNumber - 1;
 
-                var tokens = _model.GetLineTokens(lineNumber - 1);
+                _model.ForceTokenization(lineIndex);
+                var tokens = _model.GetLineTokens(lineIndex);
 
                 if (tokens == null)
                     return;
+
+                // stale トークンガード: 最終トークンの開始位置が行長を超えている場合はスキップ
+                if (tokens.Count > 0 && tokens[tokens.Count - 1].StartIndex > line.Length)
+                    return;
+
+                tokens = new List<TMToken>(tokens);
 
                 var transformsInLine = ArrayPool<ForegroundTextTransformation>.Shared.Rent(tokens.Count);
 
                 try
                 {
-                    GetLineTransformations(lineNumber, tokens, transformsInLine);
+                    GetLineTransformations(lineNumber, line.Length, tokens, transformsInLine);
 
                     for (int i = 0; i < tokens.Count; i++)
                     {
@@ -144,7 +126,7 @@ namespace AvaloniaEdit.TextMate
             }
         }
 
-        private void GetLineTransformations(int lineNumber, List<TMToken> tokens, ForegroundTextTransformation[] transformations)
+        private void GetLineTransformations(int lineNumber, int lineLength, List<TMToken> tokens, ForegroundTextTransformation[] transformations)
         {
             for (int i = 0; i < tokens.Count; i++)
             {
@@ -152,7 +134,8 @@ namespace AvaloniaEdit.TextMate
                 var nextToken = (i + 1) < tokens.Count ? tokens[i + 1] : null;
 
                 var startIndex = token.StartIndex;
-                var endIndex = nextToken?.StartIndex ?? _model.GetLines().GetLineLength(lineNumber - 1);
+                // DocumentSnapshot 経由ではなくドキュメント直参照の行長を使う
+                var endIndex = nextToken?.StartIndex ?? lineLength;
 
                 if (startIndex >= endIndex || token.Scopes == null || token.Scopes.Count == 0)
                 {
@@ -194,57 +177,10 @@ namespace AvaloniaEdit.TextMate
 
         public void ModelTokensChanged(ModelTokensChangedEvent e)
         {
-            if (e.Ranges == null)
-                return;
-
-            if (_model == null || _model.IsStopped)
-                return;
-
-            int firstChangedLineIndex = int.MaxValue;
-            int lastChangedLineIndex = -1;
-
-            foreach (var range in e.Ranges)
-            {
-                firstChangedLineIndex = Math.Min(range.FromLineNumber - 1, firstChangedLineIndex);
-                lastChangedLineIndex = Math.Max(range.ToLineNumber - 1, lastChangedLineIndex);
-            }
-
-            if (_areVisualLinesValid)
-            {
-                bool changedLinesAreNotVisible =
-                    ((firstChangedLineIndex < _firstVisibleLineIndex && lastChangedLineIndex < _firstVisibleLineIndex) ||
-                    (firstChangedLineIndex > _lastVisibleLineIndex && lastChangedLineIndex > _lastVisibleLineIndex));
-
-                if (changedLinesAreNotVisible)
-                    return;
-            }
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                int firstLineIndexToRedraw = Math.Max(firstChangedLineIndex, _firstVisibleLineIndex);
-                int lastLineIndexToRedrawLine = Math.Min(lastChangedLineIndex, _lastVisibleLineIndex);
-
-                int totalLines = _document.Lines.Count - 1;
-
-                firstLineIndexToRedraw = Clamp(firstLineIndexToRedraw, 0, totalLines);
-                lastLineIndexToRedrawLine = Clamp(lastLineIndexToRedrawLine, 0, totalLines);
-
-                DocumentLine firstLineToRedraw = _document.Lines[firstLineIndexToRedraw];
-                DocumentLine lastLineToRedraw = _document.Lines[lastLineIndexToRedrawLine];
-
-                _textView.Redraw(
-                    firstLineToRedraw.Offset,
-                    (lastLineToRedraw.Offset + lastLineToRedraw.TotalLength) - firstLineToRedraw.Offset);
-            });
-        }
-
-        static int Clamp(int value, int min, int max)
-        {
-            if (value < min)
-                return min;
-            if (value > max)
-                return max;
-            return value;
+            // BG トークナイザーの Redraw を抑制。
+            // TransformLine 内で ForceTokenization + ディープコピーを行うため、
+            // BG スレッド起因の Redraw は不要。
+            // むしろ BG Redraw が過渡的トークンでペースト時のカラーフラッシュを引き起こす。
         }
 
         static string NormalizeColor(string color)
