@@ -26,6 +26,13 @@ namespace AvaloniaEdit.TextMate
 
         private readonly Dictionary<int, IBrush> _brushes;
 
+        /// <summary>
+        /// トークンのスコープリスト・行テキスト・トークン範囲を受け取り、
+        /// true を返した場合はそのトークンの着色をスキップする。
+        /// 引数: (scopes, lineText, startIndex, endIndex)
+        /// </summary>
+        public Func<List<string>, string, int, int, bool> ScopeFilter { get; set; }
+
         public TextMateColoringTransformer(
             TextView textView,
             Action<Exception> exceptionHandler)
@@ -128,6 +135,14 @@ namespace AvaloniaEdit.TextMate
 
         private void GetLineTransformations(int lineNumber, int lineLength, List<TMToken> tokens, ForegroundTextTransformation[] transformations)
         {
+            // スコープフィルタ使用時のみ行テキストを取得（1行につき1回）
+            string lineText = null;
+            if (ScopeFilter != null)
+            {
+                var docLine = _document.GetLineByNumber(lineNumber);
+                lineText = _document.GetText(docLine.Offset, docLine.Length);
+            }
+
             for (int i = 0; i < tokens.Count; i++)
             {
                 var token = tokens[i];
@@ -138,6 +153,13 @@ namespace AvaloniaEdit.TextMate
                 var endIndex = nextToken?.StartIndex ?? lineLength;
 
                 if (startIndex >= endIndex || token.Scopes == null || token.Scopes.Count == 0)
+                {
+                    transformations[i] = null;
+                    continue;
+                }
+
+                // スコープフィルタ: 条件に合致するトークンは着色をスキップ
+                if (lineText != null && ScopeFilter(token.Scopes, lineText, startIndex, endIndex))
                 {
                     transformations[i] = null;
                     continue;

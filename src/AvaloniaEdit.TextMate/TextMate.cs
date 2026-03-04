@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using TextMateSharp.Grammars;
@@ -52,6 +53,15 @@ namespace AvaloniaEdit.TextMate
                 {
                     OnEditorOnDocumentChanged(editor, EventArgs.Empty);
                 }
+            }
+
+            /// <summary>
+            /// トークンのスコープフィルタを設定する。
+            /// フィルタが true を返したトークンは着色がスキップされる。
+            /// </summary>
+            public void SetScopeFilter(Func<List<string>, string, int, int, bool> filter)
+            {
+                GetOrCreateTransformer().ScopeFilter = filter;
             }
 
             public void SetGrammar(string scopeName)
