@@ -1447,6 +1447,25 @@ namespace AvaloniaEdit.Rendering
         }
 
         /// <summary>
+        /// Measures the width of the given text using the same TextFormatter pipeline
+        /// that AvaloniaEdit uses for rendering. This ensures the measured width matches
+        /// the actual displayed width in the editor.
+        /// </summary>
+        public double MeasureTextWidth(string text)
+        {
+            CalculateDefaultTextMetrics();
+            if (_formatter == null || string.IsNullOrEmpty(text))
+                return text?.Length * _wideSpaceWidth ?? 0;
+
+            var props = CreateGlobalTextRunProperties();
+            using var line = _formatter.FormatLine(
+                new SimpleTextSource(text, props),
+                0, 32000,
+                new VisualLineTextParagraphProperties { defaultTextRunProperties = props });
+            return line?.WidthIncludingTrailingWhitespace ?? text.Length * _wideSpaceWidth;
+        }
+
+        /// <summary>
         /// Gets the default line height. This is the height of an empty line or a line containing regular text.
         /// Lines that include formatted text or custom UI elements may have a different line height.
         /// </summary>

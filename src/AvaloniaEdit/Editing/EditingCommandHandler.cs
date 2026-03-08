@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using AvaloniaEdit.Document;
 using Avalonia.Input;
@@ -79,6 +80,7 @@ namespace AvaloniaEdit.Editing
             AddBinding(ApplicationCommands.Copy, OnCopy, CanCopy);
             AddBinding(ApplicationCommands.Cut, OnCut, CanCut);
             AddBinding(ApplicationCommands.Paste, OnPaste, CanPaste);
+            AddBinding(ApplicationCommands.PastePlain, OnPastePlain, CanPaste);
 
             AddBinding(AvaloniaEditCommands.ToggleOverstrike, OnToggleOverstrike);
             AddBinding(AvaloniaEditCommands.DeleteLine, OnDeleteLine);
@@ -410,10 +412,19 @@ namespace AvaloniaEdit.Editing
             }
         }
 
+        /// <summary>
+        /// 直前の矩形コピーテキスト（Environment.NewLine で正規化済み）。
+        /// 矩形選択以外のコピー時は null にリセットされる。
+        /// </summary>
+        internal static string LastRectangularCopyText { get; set; }
+
         private static bool CopySelectedText(TextArea textArea)
         {
             var text = textArea.Selection.GetText();
             text = TextUtilities.NormalizeNewLines(text, Environment.NewLine);
+
+            // 矩形選択コピーを追跡
+            LastRectangularCopyText = textArea.Selection is RectangleSelection ? text : null;
 
             SetClipboardText(text, textArea);
 
@@ -497,10 +508,29 @@ namespace AvaloniaEdit.Editing
         private static async void OnPaste(object target, ExecutedRoutedEventArgs args)
         {
             var textArea = GetTextArea(target);
-            if (textArea?.Document != null)
-            {
-                textArea.Document.BeginUpdate();
+            if (textArea != null)
+                await PasteCore(textArea, allowRectangular: true, args);
+        }
 
+        private static async void OnPastePlain(object target, ExecutedRoutedEventArgs args)
+        {
+            var textArea = GetTextArea(target);
+            if (textArea != null)
+                await PasteCore(textArea, allowRectangular: false, args);
+        }
+
+        /// <summary>
+        /// Ctrl+V / Ctrl+Shift+V 共通のペースト処理。
+        /// allowRectangular=true なら矩形コピーを自動検出して矩形ペーストする。
+        /// </summary>
+        private static async Task PasteCore(TextArea textArea, bool allowRectangular, ExecutedRoutedEventArgs args)
+        {
+            if (textArea.Document == null) return;
+
+            string pastedText = null;
+            textArea.Document.BeginUpdate();
+            try
+            {
                 string text = null;
                 try
                 {
@@ -508,31 +538,61 @@ namespace AvaloniaEdit.Editing
                 }
                 catch (Exception)
                 {
-                    textArea.Document.EndUpdate();
                     return;
                 }
 
-                if (text == null)
+                if (text == null) return;
+
+                // 矩形コピーデータと照合（GetTextToPaste 前の生テキストで比較）
+                var isRectangular = false;
+                if (allowRectangular)
                 {
-                    textArea.Document.EndUpdate();
-                    return;
+                    var normalizedClip = TextUtilities.NormalizeNewLines(text, Environment.NewLine);
+                    isRectangular = LastRectangularCopyText != null
+                                    && normalizedClip == LastRectangularCopyText;
                 }
-
 
                 text = GetTextToPaste(text, textArea);
 
                 if (!string.IsNullOrEmpty(text))
                 {
-                    textArea.ReplaceSelectionWithText(text);
+                    if (isRectangular)
+                    {
+                        if (textArea.Selection is RectangleSelection)
+                        {
+                            // 矩形選択中に矩形ペースト → 選択範囲を矩形テキストで置換
+                            textArea.ReplaceSelectionWithText(text);
+                        }
+                        else
+                        {
+                            // 選択なし or 通常選択 → キャレット位置に矩形挿入
+                            if (!textArea.Selection.IsEmpty)
+                                textArea.RemoveSelectedText();
+                            if (!RectangleSelection.PerformRectangularPaste(
+                                    textArea, textArea.Caret.Position, text))
+                            {
+                                textArea.ReplaceSelectionWithText(text);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        textArea.ReplaceSelectionWithText(text);
+                    }
+                    pastedText = text;
                 }
 
                 textArea.Caret.BringCaretToView();
                 args.Handled = true;
-
-                textArea.Document.EndUpdate();
-
-                textArea.OnTextPasted(new TextEventArgs(text));
             }
+            finally
+            {
+                textArea.Document.EndUpdate();
+            }
+
+            // EndUpdate 後にイベント発火（元コードと同じ順序を維持）
+            if (pastedText != null)
+                textArea.OnTextPasted(new TextEventArgs(pastedText));
         }
 
         internal static string GetTextToPaste(IDataObject dataObject, TextArea textArea)

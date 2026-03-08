@@ -357,31 +357,57 @@ namespace AvaloniaEdit.Editing
 
         /// <summary>
         /// Performs a rectangular paste operation.
+        /// ピクセル X 座標ではなく文字カラム位置ベースで各行に挿入する。
+        /// CJK 文字と ASCII 文字が混在しても全行同じカラムに挿入される。
         /// </summary>
-        public static bool PerformRectangularPaste(TextArea textArea, TextViewPosition startPosition, string text, bool selectInsertedText)
+        public static bool PerformRectangularPaste(TextArea textArea, TextViewPosition startPosition, string text)
         {
             if (textArea == null)
                 throw new ArgumentNullException(nameof(textArea));
             if (text == null)
                 throw new ArgumentNullException(nameof(text));
-            var newLineCount = text.AsEnumerable().Count(c => c == '\n'); // TODO might not work in all cases, but single \r line endings are really rare today.
-            var endLocation = new TextLocation(startPosition.Line + newLineCount, startPosition.Column);
-            if (endLocation.Line <= textArea.Document.LineCount)
+
+            var newLineCount = text.Count(c => c == '\n');
+            var endLine = startPosition.Line + newLineCount;
+
+            if (endLine > textArea.Document.LineCount)
+                return false;
+
+            // キャレットの文字カラム位置（0-based）を全行の挿入位置として使用
+            var targetCharOffset = startPosition.Column - 1;
+
+            var lines = text.Split(NewLineFinder.NewlineStrings, newLineCount + 1, StringSplitOptions.None);
+
+            using (textArea.Document.RunUpdate())
             {
-                var endOffset = textArea.Document.GetOffset(endLocation);
-                if (textArea.Selection.EnableVirtualSpace || textArea.Document.GetLocation(endOffset) == endLocation)
+                // 逆順で挿入（後方行から処理してオフセットズレを防止）
+                for (var i = lines.Length - 1; i >= 0; i--)
                 {
-                    var rsel = new RectangleSelection(textArea, startPosition, endLocation.Line, GetXPos(textArea, startPosition));
-                    rsel.ReplaceSelectionWithText(text);
-                    if (selectInsertedText && textArea.Selection is RectangleSelection)
+                    var lineNumber = startPosition.Line + i;
+                    var docLine = textArea.Document.GetLineByNumber(lineNumber);
+                    var lineLength = docLine.Length;
+
+                    if (targetCharOffset <= lineLength)
                     {
-                        var sel = (RectangleSelection)textArea.Selection;
-                        textArea.Selection = new RectangleSelection(textArea, startPosition, sel._endLine, sel._endXPos);
+                        // 行が十分長い → そのまま挿入
+                        textArea.Document.Insert(docLine.Offset + targetCharOffset, lines[i]);
                     }
-                    return true;
+                    else
+                    {
+                        // 行が短い → スペースでパディングして挿入
+                        var padding = new string(' ', targetCharOffset - lineLength);
+                        textArea.Document.Insert(docLine.Offset + lineLength, padding + lines[i]);
+                    }
                 }
+
+                // キャレット位置を最終行の挿入末尾に更新
+                textArea.Caret.Position = new TextViewPosition(
+                    endLine,
+                    targetCharOffset + lines[^1].Length + 1);
+                textArea.ClearSelection();
             }
-            return false;
+
+            return true;
         }
 
         /// <summary>
