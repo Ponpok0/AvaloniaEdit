@@ -72,6 +72,9 @@ namespace AvaloniaEdit.Editing
         private SelectionMode _mode;
         private AnchorSegment _startWord;
         private Point _possibleDragStartMousePos;
+        private Point _mouseDownPos;
+        private long _mouseDownTick;
+        private bool _isDragging;
         private Point _lastMousePosition;
 
         #region Constructor + Attach + Detach
@@ -502,6 +505,9 @@ namespace AvaloniaEdit.Editing
                         else if (pointer.Properties.IsLeftButtonPressed && e.ClickCount == 1) // e.ClickCount == 1
                         {
                             _mode = SelectionMode.Normal;
+                            _mouseDownPos = mousePosition;
+                            _mouseDownTick = Environment.TickCount64;
+                            _isDragging = shift; // Shift+クリックは即座にドラッグ扱い
                             if (shift && !(TextArea.Selection is RectangleSelection))
                             {
                                 TextArea.Selection = TextArea.Selection.StartSelectionOrSetEndpoint(oldPosition, TextArea.Caret.Position);
@@ -619,7 +625,11 @@ namespace AvaloniaEdit.Editing
                 pos = pos.WithY(textView.Bounds.Height);
             pos += textView.ScrollOffset;
             if (pos.Y >= textView.DocumentHeight)
-                pos = pos.WithY(textView.DocumentHeight - ExtensionMethods.Epsilon);
+            {
+                // ドキュメント下の空白エリア: 末尾を返す
+                isAtEndOfLine = true;
+                return TextArea.Document.TextLength;
+            }
             var line = textView.GetVisualLineFromVisualTop(pos.Y);
             if (line != null && line.TextLines != null)
             {
@@ -641,7 +651,10 @@ namespace AvaloniaEdit.Editing
                 pos = pos.WithY(textView.Bounds.Height);
             pos += textView.ScrollOffset;
             if (pos.Y >= textView.DocumentHeight)
-                pos = pos.WithY(textView.DocumentHeight - ExtensionMethods.Epsilon);
+            {
+                // ドキュメント下の空白エリア: 末尾を返す
+                return TextArea.Document.TextLength;
+            }
             var line = textView.GetVisualLineFromVisualTop(pos.Y);
             if (line != null && line.TextLines != null)
             {
@@ -654,6 +667,12 @@ namespace AvaloniaEdit.Editing
 
         private const int MinimumHorizontalDragDistance = 2;
         private const int MinimumVerticalDragDistance = 2;
+
+        // ドラッグ選択開始条件: 時間 AND 距離の両方を満たす必要がある
+        // 80ms 未満は手ブレと見なし全ての移動を無視
+        // 80ms 以降は 10DIP 以上移動でドラッグ選択開始
+        private const long ClickTimeThresholdMs = 80;
+        private const double ClickDistanceThreshold = 10.0;
 
         #region MouseMove
 
@@ -668,6 +687,20 @@ namespace AvaloniaEdit.Editing
             if (_mode == SelectionMode.Normal || _mode == SelectionMode.WholeWord || _mode == SelectionMode.WholeLine || _mode == SelectionMode.Rectangular)
             {
                 e.Handled = true;
+
+                // Normal モード: 時間 AND 距離の両方を満たすまで選択を開始しない
+                if (_mode == SelectionMode.Normal && !_isDragging)
+                {
+                    var elapsed = Environment.TickCount64 - _mouseDownTick;
+                    if (elapsed < ClickTimeThresholdMs)
+                        return;
+                    var delta = mousePosition - _mouseDownPos;
+                    if (Math.Abs(delta.X) < ClickDistanceThreshold
+                        && Math.Abs(delta.Y) < ClickDistanceThreshold)
+                        return;
+                    _isDragging = true;
+                }
+
                 if (TextArea.TextView.VisualLinesValid)
                 {
                     // If the visual lines are not valid, don't extend the selection.
@@ -692,11 +725,15 @@ namespace AvaloniaEdit.Editing
         {
             // Handle indirect mouse movement caused by scrolling the text area while holding down
             // the mouse button.
-            if (_mode == SelectionMode.Normal 
-                || _mode == SelectionMode.WholeWord 
-                || _mode == SelectionMode.WholeLine 
+            if (_mode == SelectionMode.Normal
+                || _mode == SelectionMode.WholeWord
+                || _mode == SelectionMode.WholeLine
                 || _mode == SelectionMode.Rectangular)
             {
+                // Normal モードでドラッグ開始前ならスクロール起因の選択もスキップ
+                if (_mode == SelectionMode.Normal && !_isDragging)
+                    return;
+
                 if (TextArea.TextView.VisualLinesValid)
                 {
                     ExtendSelectionToMouse(_lastMousePosition);
@@ -782,6 +819,17 @@ namespace AvaloniaEdit.Editing
                     TextArea.ClearSelection();
                     break;
                 case SelectionMode.Normal:
+                    if (!_isDragging)
+                    {
+                        // 時間しきい値内で完了 = クリック。キャレット設定のみ
+                        SetCaretOffsetToMousePosition(mousePosition);
+                        TextArea.ClearSelection();
+                    }
+                    else if (TextArea.Options.ExtendSelectionOnMouseUp)
+                    {
+                        ExtendSelectionToMouse(mousePosition);
+                    }
+                    break;
                 case SelectionMode.WholeWord:
                 case SelectionMode.WholeLine:
                 case SelectionMode.Rectangular:
