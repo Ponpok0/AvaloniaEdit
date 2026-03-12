@@ -669,8 +669,8 @@ namespace AvaloniaEdit.Editing
         private const int MinimumVerticalDragDistance = 2;
 
         // ドラッグ選択開始条件: 時間 AND 距離の両方を満たす必要がある
-        private const long ClickTimeThresholdMs = 30;
-        private const double ClickDistanceThreshold = 4.0;
+        private const long ClickTimeThresholdMs = 15;
+        private const double ClickDistanceThreshold = 2.0;
 
         #region MouseMove
 
