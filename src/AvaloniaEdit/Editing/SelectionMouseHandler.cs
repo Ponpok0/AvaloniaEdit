@@ -669,10 +669,8 @@ namespace AvaloniaEdit.Editing
         private const int MinimumVerticalDragDistance = 2;
 
         // ドラッグ選択開始条件: 時間 AND 距離の両方を満たす必要がある
-        // 80ms 未満は手ブレと見なし全ての移動を無視
-        // 80ms 以降は 10DIP 以上移動でドラッグ選択開始
-        private const long ClickTimeThresholdMs = 80;
-        private const double ClickDistanceThreshold = 10.0;
+        private const long ClickTimeThresholdMs = 30;
+        private const double ClickDistanceThreshold = 4.0;
 
         #region MouseMove
 
@@ -776,7 +774,20 @@ namespace AvaloniaEdit.Editing
             var oldPosition = TextArea.Caret.Position;
             if (_mode == SelectionMode.Normal || _mode == SelectionMode.Rectangular)
             {
-                SetCaretOffsetToMousePosition(pointerPosition);
+                // 選択拡張時: ドラッグ方向に応じて Y を半行分オフセットし、
+                // 行の中間で遷移が発火するようにする（上下対称）
+                // mouseDown 近傍では段階的に適用し不連続を防ぐ
+                var adjustedPos = pointerPosition;
+                if (_mode == SelectionMode.Normal)
+                {
+                    var textView = TextArea.TextView;
+                    var lineHeight = textView.DefaultLineHeight;
+                    var deltaY = pointerPosition.Y - _mouseDownPos.Y;
+                    var maxOffset = lineHeight / 2;
+                    var offset = Math.Clamp(deltaY / 2, -maxOffset, maxOffset);
+                    adjustedPos = pointerPosition.WithY(pointerPosition.Y + offset);
+                }
+                SetCaretOffsetToMousePosition(adjustedPos);
                 if (_mode == SelectionMode.Normal && TextArea.Selection is RectangleSelection)
                     TextArea.Selection = new SimpleSelection(TextArea, oldPosition, TextArea.Caret.Position);
                 else if (_mode == SelectionMode.Rectangular && !(TextArea.Selection is RectangleSelection))
