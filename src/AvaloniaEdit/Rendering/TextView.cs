@@ -145,7 +145,7 @@ namespace AvaloniaEdit.Rendering
         {
             if (oldValue != null)
             {
-                _heightTree.Dispose();
+                _heightTree?.Dispose();
                 _heightTree = null;
                 _formatter = null;
                 CachedElements = null;
@@ -897,7 +897,7 @@ namespace AvaloniaEdit.Rendering
             MeasureInlineObjects();
 
             double maxWidth;
-            if (_document == null)
+            if (_document == null || _heightTree == null)
             {
                 // no document -> create empty list of lines
                 _allVisualLines = new List<VisualLine>();
