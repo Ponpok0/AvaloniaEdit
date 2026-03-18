@@ -534,7 +534,11 @@ namespace AvaloniaEdit.Editing
                 string text = null;
                 try
                 {
-                    text = await TopLevel.GetTopLevel(textArea)?.Clipboard?.GetTextAsync();
+                    // カスタムペーストプロバイダー優先（HTML→Markdown変換等）
+                    if (allowRectangular && TextArea.ClipboardPasteProvider != null)
+                        text = await TextArea.ClipboardPasteProvider(textArea);
+
+                    text ??= await TopLevel.GetTopLevel(textArea)?.Clipboard?.GetTextAsync();
                 }
                 catch (Exception)
                 {
