@@ -86,6 +86,23 @@ namespace AvaloniaEdit.TextMate
             }
         }
 
+        /// <summary>
+        /// 指定スコープスタックに一致するテーマ前景色ブラシを返す。
+        /// 一致しない場合は null。
+        /// </summary>
+        public IBrush ResolveScopeBrush(List<string> scopes)
+        {
+            if (_theme == null) return null;
+
+            foreach (var themeRule in _theme.Match(scopes))
+            {
+                if (themeRule.foreground > 0 && _brushes.TryGetValue(themeRule.foreground, out var brush))
+                    return brush;
+            }
+
+            return null;
+        }
+
         protected override void TransformLine(DocumentLine line, ITextRunConstructionContext context)
         {
             try

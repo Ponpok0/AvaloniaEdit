@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using Avalonia.Media;
 using TextMateSharp.Grammars;
 using TextMateSharp.Model;
 using TextMateSharp.Registry;
@@ -84,6 +85,15 @@ namespace AvaloniaEdit.TextMate
             public bool TryGetThemeColor(string colorKey, out string colorString)
             {
                 return _themeColorsDictionary.TryGetValue(colorKey, out colorString);
+            }
+
+            /// <summary>
+            /// TextMate テーマのトークンスコープ色をブラシとして解決する。
+            /// 一致しない場合は null。
+            /// </summary>
+            public IBrush ResolveTokenBrush(List<string> scopes)
+            {
+                return _transformer?.ResolveScopeBrush(scopes);
             }
 
             public void SetTheme(IRawTheme theme)
