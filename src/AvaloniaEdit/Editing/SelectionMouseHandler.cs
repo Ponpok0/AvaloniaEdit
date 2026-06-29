@@ -258,7 +258,7 @@ namespace AvaloniaEdit.Editing
                         TextArea.Document.UndoStack.StartUndoGroup(this.currentDragDescriptor);
                         try
                         {
-                            if (rectangular && RectangleSelection.PerformRectangularPaste(TextArea, TextArea.Caret.Position, text, true))
+                            if (rectangular && RectangleSelection.PerformRectangularPaste(TextArea, TextArea.Caret.Position, text))
                             {
 
                             }
