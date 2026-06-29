@@ -37,6 +37,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace AvaloniaEdit.Editing
 {
@@ -45,6 +46,12 @@ namespace AvaloniaEdit.Editing
     /// </summary>
     public class TextArea : TemplatedControl, ITextEditorComponent, IRoutedCommandBindable, ILogicalScrollable
     {
+        /// <summary>
+        /// ホストアプリがカスタムペーストテキストを提供するためのデリゲート。
+        /// null を返すと通常の Clipboard.TryGetDataAsync().TryGetTextAsync() フォールバック。
+        /// </summary>
+        public static Func<TextArea, Task<string>> ClipboardPasteProvider { get; set; }
+
         /// <summary>
         /// This is the extra scrolling space that occurs after the last line.
         /// </summary>
