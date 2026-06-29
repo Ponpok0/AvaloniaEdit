@@ -29,6 +29,7 @@ namespace AvaloniaEdit.Rendering
 		internal double tabSize;
 		internal double indent;
 		internal bool firstLineInParagraph;
+		internal double letterSpacing;
 
 		public override double DefaultIncrementalTab => tabSize;
 
@@ -42,5 +43,6 @@ namespace AvaloniaEdit.Rendering
 
 		//public override TextMarkerProperties TextMarkerProperties { get { return null; } }
 		public override double Indent => indent;
+		public override double LetterSpacing => letterSpacing;
 	}
 }

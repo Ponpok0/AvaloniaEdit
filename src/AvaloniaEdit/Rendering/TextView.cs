@@ -128,6 +128,9 @@ namespace AvaloniaEdit.Rendering
             set => SetValue(TemplatedControl.FontFamilyProperty, value);
         }
 
+        /// <summary>文字間隔（ピクセル単位）。0 = デフォルト。変更後は Redraw() を呼ぶこと。</summary>
+        public double LetterSpacing { get; set; }
+
         /// <summary>
         /// Occurs when the document property has changed.
         /// </summary>
@@ -1040,7 +1043,8 @@ namespace AvaloniaEdit.Rendering
             {
                 defaultTextRunProperties = defaultTextRunProperties,
                 textWrapping = _canHorizontallyScroll ? TextWrapping.NoWrap : TextWrapping.Wrap,
-                tabSize = Options.IndentationSize * WideSpaceWidth
+                tabSize = Options.IndentationSize * WideSpaceWidth,
+                letterSpacing = LetterSpacing
             };
         }
 
