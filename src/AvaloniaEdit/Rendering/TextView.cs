@@ -787,6 +787,7 @@ namespace AvaloniaEdit.Rendering
         private List<VisualLine> _allVisualLines = new List<VisualLine>();
         private ReadOnlyCollection<VisualLine> _visibleVisualLines;
         private double _clippedPixelsOnTop;
+        private double _documentTopOffset;
         private List<VisualLine> _newVisualLines;
 
         /// <summary>
@@ -955,12 +956,13 @@ namespace AvaloniaEdit.Rendering
             VisualLineTextParagraphProperties paragraphProperties = CreateParagraphProperties(globalTextRunProperties);
 
             //Debug.WriteLine("Measure availableSize=" + availableSize + ", scrollOffset=" + _scrollOffset);
-            var firstLineInView = _heightTree.GetLineByVisualPosition(_scrollOffset.Y);
+            var effectiveScrollY = Math.Max(0, _scrollOffset.Y - _documentTopOffset);
+            var firstLineInView = _heightTree.GetLineByVisualPosition(effectiveScrollY);
 
-            // number of pixels clipped from the first visual line(s)
-            _clippedPixelsOnTop = _scrollOffset.Y - _heightTree.GetVisualPosition(firstLineInView);
-            // clippedPixelsOnTop should be >= 0, except for floating point inaccurracy.
-            Debug.Assert(_clippedPixelsOnTop >= -ExtensionMethods.Epsilon);
+            // number of pixels clipped from the first visual line(s).
+            // When scrollOffset < documentTopOffset, this value is negative,
+            // which naturally pushes the first line below the top of the viewport.
+            _clippedPixelsOnTop = _scrollOffset.Y - _documentTopOffset - _heightTree.GetVisualPosition(firstLineInView);
 
             _newVisualLines = new List<VisualLine>();
 
@@ -1694,7 +1696,7 @@ namespace AvaloniaEdit.Rendering
             VerifyAccess();
             if (_heightTree == null)
                 throw ThrowUtil.NoDocumentAssigned();
-            return _heightTree.GetVisualPosition(_heightTree.GetLineByNumber(line));
+            return _heightTree.GetVisualPosition(_heightTree.GetLineByNumber(line)) + _documentTopOffset;
         }
 
         private VisualLineElement GetVisualLineElementFromPosition(Point visualPosition)
@@ -1908,9 +1910,26 @@ namespace AvaloniaEdit.Rendering
         }
 
         /// <summary>
+        /// Gets or sets the vertical offset (in pixels) added above the first document line.
+        /// This creates empty space at the top of the document without affecting the text content.
+        /// </summary>
+        public double DocumentTopOffset
+        {
+            get => _documentTopOffset;
+            set
+            {
+                if (!_documentTopOffset.IsClose(value))
+                {
+                    _documentTopOffset = value;
+                    InvalidateMeasure();
+                }
+            }
+        }
+
+        /// <summary>
         /// Gets the height of the document.
         /// </summary>
-        public double DocumentHeight => _heightTree?.TotalHeight ?? 0;
+        public double DocumentHeight => (_heightTree?.TotalHeight ?? 0) + _documentTopOffset;
 
         /// <summary>
         /// Gets the document line at the specified visual position.
@@ -1920,7 +1939,7 @@ namespace AvaloniaEdit.Rendering
             VerifyAccess();
             if (_heightTree == null)
                 throw ThrowUtil.NoDocumentAssigned();
-            return _heightTree.GetLineByVisualPosition(visualTop);
+            return _heightTree.GetLineByVisualPosition(Math.Max(0, visualTop - _documentTopOffset));
         }
 
         /// <inheritdoc/>
