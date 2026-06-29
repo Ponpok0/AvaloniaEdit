@@ -61,6 +61,17 @@ namespace AvaloniaEdit.Editing
 
         private readonly TextAreaTextInputMethodClient _imClient = new TextAreaTextInputMethodClient();
 
+        /// <summary>IME プリエディットテキストのドキュメント内オフセット。非アクティブ時は -1。</summary>
+        public int PreeditOffset => _imClient.PreeditOffset;
+
+        /// <summary>IME プリエディットテキストの長さ。</summary>
+        public int PreeditLength => _imClient.PreeditLength;
+
+        /// <summary>IME プリエディット範囲が変化したときに発火する。</summary>
+        public event EventHandler PreeditChanged;
+
+        internal void RaisePreeditChanged() => PreeditChanged?.Invoke(this, EventArgs.Empty);
+
         #region Constructor
         static TextArea()
         {
@@ -991,6 +1002,10 @@ namespace AvaloniaEdit.Editing
         {
             base.OnKeyDown(e);
 
+            // IME プリエディット中は Tab 等の TextArea 固有キー処理をスキップ。
+            // e.Handled は設定しない — IME が消費しないキーは親コントロールに伝播させる。
+            if (_imClient.PreeditLength > 0) return;
+
             if (e.Key == Key.Tab && Options.AcceptsTab && IsFocused)
             {
                 e.Handled = true;
@@ -1211,6 +1226,11 @@ namespace AvaloniaEdit.Editing
         private class TextAreaTextInputMethodClient : TextInputMethodClient
         {
             private TextArea _textArea;
+            private int _preeditOffset = -1;
+            private int _preeditLength;
+
+            public int PreeditOffset => _preeditOffset;
+            public int PreeditLength => _preeditLength;
 
             public TextAreaTextInputMethodClient()
             {
@@ -1245,7 +1265,7 @@ namespace AvaloniaEdit.Editing
 
             public override Visual TextViewVisual => _textArea;
 
-            public override bool SupportsPreedit => false;
+            public override bool SupportsPreedit => true;
 
             public override bool SupportsSurroundingText => true;
 
@@ -1290,6 +1310,12 @@ namespace AvaloniaEdit.Editing
 
             public void SetTextArea(TextArea textArea)
             {
+                // フォーカス喪失時: アクティブな preedit をクリア
+                if (textArea == null && _textArea != null && _preeditLength > 0)
+                {
+                    SetPreeditText(null);
+                }
+
                 if (_textArea != null)
                 {
                     _textArea.Caret.PositionChanged -= Caret_PositionChanged;
@@ -1318,7 +1344,42 @@ namespace AvaloniaEdit.Editing
 
             public override void SetPreeditText(string text)
             {
+                if (_textArea == null) return;
+                var doc = _textArea.Document;
+                if (doc == null) return;
 
+                doc.UndoStack.SuppressRecording = true;
+                try
+                {
+                    // 前回の preedit テキストを除去
+                    if (_preeditLength > 0 && _preeditOffset >= 0
+                        && _preeditOffset + _preeditLength <= doc.TextLength)
+                    {
+                        doc.Remove(_preeditOffset, _preeditLength);
+                        _textArea.Caret.Offset = _preeditOffset;
+                    }
+
+                    // 新しい preedit テキストを挿入
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        _preeditOffset = _textArea.Caret.Offset;
+                        _preeditLength = text.Length;
+                        doc.Insert(_preeditOffset, text);
+                        _textArea.Caret.Offset = _preeditOffset + _preeditLength;
+                    }
+                    else
+                    {
+                        _preeditOffset = -1;
+                        _preeditLength = 0;
+                    }
+                }
+                finally
+                {
+                    doc.UndoStack.SuppressRecording = false;
+                }
+
+                _textArea.RaisePreeditChanged();
+                RaiseCursorRectangleChanged();
             }
         }
     }
