@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
+using Avalonia.Media;
 using TextMateSharp.Grammars;
 using TextMateSharp.Model;
 using TextMateSharp.Registry;
@@ -170,6 +172,26 @@ namespace AvaloniaEdit.TextMate
                     throw new ObjectDisposedException(nameof(Installation));
 
                 return dict.TryGetValue(colorKey, out colorString);
+            }
+
+            /// <summary>
+            /// トークンのスコープフィルタを設定する。
+            /// フィルタが true を返したトークンは着色がスキップされる。
+            /// </summary>
+            public void SetScopeFilter(Func<List<string>, string, int, int, bool> filter)
+            {
+                ThrowIfDisposed();
+                _transformer.ScopeFilter = filter;
+            }
+
+            /// <summary>
+            /// TextMate テーマのトークンスコープ色をブラシとして解決する。
+            /// 一致しない場合は null。
+            /// </summary>
+            public IBrush ResolveTokenBrush(List<string> scopes)
+            {
+                ThrowIfDisposed();
+                return _transformer?.ResolveScopeBrush(scopes);
             }
 
             public void SetTheme(IRawTheme theme)

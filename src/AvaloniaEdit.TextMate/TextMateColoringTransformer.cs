@@ -28,10 +28,9 @@ namespace AvaloniaEdit.TextMate
         private readonly TextView _textView;
         private readonly Action<Exception> _exceptionHandler;
 
-        // These fields are only accessed under _lock so volatile is unnecessary
-        private bool _areVisualLinesValid;
-        private int _firstVisibleLineIndex = -1;
-        private int _lastVisibleLineIndex = -1;
+        // VisualLinesChanged トラッキング (_areVisualLinesValid / _firstVisibleLineIndex /
+        // _lastVisibleLineIndex) は ModelTokensChanged の Redraw 制御専用だったが、
+        // ペーストフラッシュ対策で ModelTokensChanged を no-op 化したため削除済み。
 
         // Copy-on-write: SetTheme builds a new dictionary and atomically swaps
         // the reference under lock. Readers capture the reference once and use it
@@ -42,6 +41,13 @@ namespace AvaloniaEdit.TextMate
         // the concurrent read. The old dictionary becomes unreachable once all
         // in-flight readers complete, and is collected by GC naturally.
         private Dictionary<int, IBrush> _brushes;
+
+        /// <summary>
+        /// トークンのスコープリスト・行テキスト・トークン範囲を受け取り、
+        /// true を返した場合はそのトークンの着色をスキップする。
+        /// 引数: (scopes, lineText, startIndex, endIndex)
+        /// </summary>
+        public Func<List<string>, string, int, int, bool> ScopeFilter { get; set; }
 
         /// <summary>
         /// Initializes a new instance of the TextMateColoringTransformer class, which applies syntax highlighting to
@@ -61,7 +67,6 @@ namespace AvaloniaEdit.TextMate
             _exceptionHandler = exceptionHandler;
 
             _brushes = new Dictionary<int, IBrush>();
-            _textView.VisualLinesChanged += TextView_VisualLinesChanged;
         }
 
         /// <summary>
@@ -81,7 +86,6 @@ namespace AvaloniaEdit.TextMate
             {
                 ThrowIfDisposed();
 
-                _areVisualLinesValid = false;
                 _document = document;
                 _model = model;
 
@@ -92,41 +96,6 @@ namespace AvaloniaEdit.TextMate
                 {
                     _model.SetGrammar(_grammar);
                 }
-            }
-        }
-
-        /// <summary>
-        /// Handles the event that occurs when the visual lines of the text view are changed, updating the indices of
-        /// the first and last visible lines as needed.
-        /// </summary>
-        /// <remarks>This method performs updates only if the text view is valid and not disposed. If an
-        /// exception occurs during processing, an optional exception handler is invoked if one is set.</remarks>
-        /// <param name="sender">The source of the event, typically the text view control whose visual lines have changed.</param>
-        /// <param name="e">The event data associated with the visual lines changed event.</param>
-        private void TextView_VisualLinesChanged(object sender, EventArgs e)
-        {
-            // Fast path: event handler - silently return if disposed.
-            if (Volatile.Read(ref _isDisposed))
-                return;
-
-            try
-            {
-                if (!_textView.VisualLinesValid || _textView.VisualLines.Count == 0)
-                    return;
-
-                lock (_lock)
-                {
-                    if (Volatile.Read(ref _isDisposed))
-                        return;
-
-                    _areVisualLinesValid = true;
-                    _firstVisibleLineIndex = _textView.VisualLines[0].FirstDocumentLine.LineNumber - 1;
-                    _lastVisibleLineIndex = _textView.VisualLines[_textView.VisualLines.Count - 1].LastDocumentLine.LineNumber - 1;
-                }
-            }
-            catch (Exception ex)
-            {
-                _exceptionHandler?.Invoke(ex);
             }
         }
 
@@ -174,10 +143,6 @@ namespace AvaloniaEdit.TextMate
                 _document = null;
                 _brushes = null;
             }
-
-            // Unsubscribe outside lock - _textView is readonly so this is safe,
-            // and avoids calling external code under lock.
-            _textView.VisualLinesChanged -= TextView_VisualLinesChanged;
         }
 
         /// <summary>
@@ -245,6 +210,37 @@ namespace AvaloniaEdit.TextMate
         }
 
         /// <summary>
+        /// 指定スコープスタックに一致するテーマ前景色ブラシを返す。
+        /// 一致しない場合は null。スレッドセーフ (_theme/_brushes のスナップショットを lock 内で取得)。
+        /// </summary>
+        public IBrush ResolveScopeBrush(List<string> scopes)
+        {
+            if (Volatile.Read(ref _isDisposed))
+                return null;
+
+            Theme theme;
+            Dictionary<int, IBrush> brushes;
+            lock (_lock)
+            {
+                if (Volatile.Read(ref _isDisposed))
+                    return null;
+                theme = _theme;
+                brushes = _brushes;
+            }
+
+            if (theme == null || brushes == null)
+                return null;
+
+            foreach (var themeRule in theme.Match(scopes))
+            {
+                if (themeRule.foreground > 0 && brushes.TryGetValue(themeRule.foreground, out var brush))
+                    return brush;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Transforms the specified document line by applying syntax highlighting and theme-based color transformations
         /// according to the current model and theme settings.
         /// </summary>
@@ -286,19 +282,30 @@ namespace AvaloniaEdit.TextMate
                     return;
 
                 int lineNumber = line.LineNumber;
+                int lineIndex = lineNumber - 1;
 
-                var tokens = model.GetLineTokens(lineNumber - 1);
+                // 同期 ForceTokenization: BG トークナイザーの過渡的トークンを使わず常に最新を取得。
+                // これにより ModelTokensChanged 経由の Redraw を no-op にしてもカラーフラッシュが起きない。
+                model.ForceTokenization(lineIndex);
+                var tokens = model.GetLineTokens(lineIndex);
 
                 // If there are no tokens to process, avoid the overhead of GetLineTransformations
                 // (including its internal GetLineByNumber call)
                 if (tokens == null || tokens.Count == 0)
                     return;
 
+                // stale トークンガード: 最終トークンの開始位置が行長を超えている場合はスキップ
+                if (tokens[tokens.Count - 1].StartIndex > line.Length)
+                    return;
+
+                // DeepCopy: tokens リストは BG スレッドから変更される可能性があるためコピーを使う
+                tokens = new List<TMToken>(tokens);
+
                 var transformsInLine = ArrayPool<ForegroundTextTransformation>.Shared.Rent(tokens.Count);
 
                 try
                 {
-                    GetLineTransformations(lineNumber, tokens, transformsInLine, model, document, theme, brushes);
+                    GetLineTransformations(lineNumber, line.Length, tokens, transformsInLine, model, document, theme, brushes);
 
                     for (int i = 0; i < tokens.Count; i++)
                     {
@@ -349,6 +356,7 @@ namespace AvaloniaEdit.TextMate
         /// tokens.</param>
         private void GetLineTransformations(
             int lineNumber,
+            int lineLength,
             List<TMToken> tokens,
             ForegroundTextTransformation[] transformations,
             TMModel model,
@@ -358,7 +366,16 @@ namespace AvaloniaEdit.TextMate
         {
             // Hoisted outside the loop: lineNumber is invariant across all tokens
             // in this line, so GetLineByNumber only needs to be called once
-            var lineOffset = document.GetLineByNumber(lineNumber).Offset;
+            var docLine = document.GetLineByNumber(lineNumber);
+            var lineOffset = docLine.Offset;
+
+            // スコープフィルタ使用時のみ行テキストを取得 (1 行につき 1 回)
+            string lineText = null;
+            var scopeFilter = ScopeFilter;
+            if (scopeFilter != null)
+            {
+                lineText = document.GetText(lineOffset, docLine.Length);
+            }
 
             for (int i = 0; i < tokens.Count; i++)
             {
@@ -366,9 +383,17 @@ namespace AvaloniaEdit.TextMate
                 var nextToken = (i + 1) < tokens.Count ? tokens[i + 1] : null;
 
                 var startIndex = token.StartIndex;
-                var endIndex = nextToken?.StartIndex ?? model.GetLines().GetLineLength(lineNumber - 1);
+                // DocumentSnapshot 経由ではなくドキュメント直参照の行長を使う (cc153cc 整合)
+                var endIndex = nextToken?.StartIndex ?? lineLength;
 
                 if (startIndex >= endIndex || token.Scopes == null || token.Scopes.Count == 0)
+                {
+                    transformations[i] = null;
+                    continue;
+                }
+
+                // スコープフィルタ: 条件に合致するトークンは着色をスキップ
+                if (lineText != null && scopeFilter(token.Scopes, lineText, startIndex, endIndex))
                 {
                     transformations[i] = null;
                     continue;
@@ -412,84 +437,10 @@ namespace AvaloniaEdit.TextMate
         /// <param name="e">An event object containing the ranges of lines in the model that have changed.</param>
         public void ModelTokensChanged(ModelTokensChangedEvent e)
         {
-            if (e.Ranges == null)
-                return;
-
-            // Background callback - silently return if disposed
-            if (Volatile.Read(ref _isDisposed))
-                return;
-
-            // Capture a consistent snapshot under lock. ModelTokensChanged is called
-            // from the tokenizer's background thread, so every field read must be
-            // synchronized against UI-thread writes (SetModel, Dispose, etc.)
-            TMModel model;
-            TextDocument document;
-            bool areVisualLinesValid;
-            int firstVisibleLineIndex;
-            int lastVisibleLineIndex;
-
-            lock (_lock)
-            {
-                if (Volatile.Read(ref _isDisposed))
-                    return;
-
-                model = _model;
-                document = _document;
-                areVisualLinesValid = _areVisualLinesValid;
-                firstVisibleLineIndex = _firstVisibleLineIndex;
-                lastVisibleLineIndex = _lastVisibleLineIndex;
-            }
-
-            if (model == null || model.IsStopped)
-                return;
-
-            if (document == null)
-                return;
-
-            int firstChangedLineIndex = int.MaxValue;
-            int lastChangedLineIndex = -1;
-
-            foreach (var range in e.Ranges)
-            {
-                firstChangedLineIndex = Math.Min(range.FromLineNumber - 1, firstChangedLineIndex);
-                lastChangedLineIndex = Math.Max(range.ToLineNumber - 1, lastChangedLineIndex);
-            }
-
-            if (areVisualLinesValid)
-            {
-                bool changedLinesAreNotVisible =
-                    ((firstChangedLineIndex < firstVisibleLineIndex && lastChangedLineIndex < firstVisibleLineIndex) ||
-                    (firstChangedLineIndex > lastVisibleLineIndex && lastChangedLineIndex > lastVisibleLineIndex));
-
-                if (changedLinesAreNotVisible)
-                    return;
-            }
-
-            // The lambda captures only locals - no mutable field reads at dispatch time.
-            // This eliminates the race between the Post() call (background thread) and
-            // the lambda execution (UI thread), where SetModel or Dispose could have
-            // nulled _document or changed the visible line range.
-            Dispatcher.UIThread.Post(() =>
-            {
-                // Guard against disposal that occurred between Post() and execution
-                if (Volatile.Read(ref _isDisposed))
-                    return;
-
-                int firstLineIndexToRedraw = Math.Max(firstChangedLineIndex, firstVisibleLineIndex);
-                int lastLineIndexToRedrawLine = Math.Min(lastChangedLineIndex, lastVisibleLineIndex);
-
-                int totalLines = document.Lines.Count - 1;
-
-                firstLineIndexToRedraw = Clamp(firstLineIndexToRedraw, 0, totalLines);
-                lastLineIndexToRedrawLine = Clamp(lastLineIndexToRedrawLine, 0, totalLines);
-
-                DocumentLine firstLineToRedraw = document.Lines[firstLineIndexToRedraw];
-                DocumentLine lastLineToRedraw = document.Lines[lastLineIndexToRedrawLine];
-
-                _textView.Redraw(
-                    firstLineToRedraw.Offset,
-                    (lastLineToRedraw.Offset + lastLineToRedraw.TotalLength) - firstLineToRedraw.Offset);
-            });
+            // ペーストフラッシュ対策: BG トークナイザー起因の Redraw を抑制。
+            // TransformLine 内で ForceTokenization + DeepCopy を行うため、
+            // BG スレッド起因の Redraw は不要。
+            // むしろ BG Redraw が過渡的トークンでペースト時のカラーフラッシュを引き起こす。
         }
 
         /// <summary>
