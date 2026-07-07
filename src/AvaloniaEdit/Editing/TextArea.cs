@@ -707,6 +707,13 @@ namespace AvaloniaEdit.Editing
             }
         }
 
+        /// <summary>
+        /// Gets or sets whether ScrollToLine is suppressed when the caret position changes.
+        /// Callers restoring state (tab switch, layout restore) should set this to true around
+        /// caret assignments to prevent unwanted auto-scroll to caret line.
+        /// </summary>
+        public bool SuppressScrollOnCaretMove { get; set; }
+
         private void CaretPositionChanged(object sender, EventArgs e)
         {
             if (TextView == null)
@@ -714,7 +721,8 @@ namespace AvaloniaEdit.Editing
 
             TextView.HighlightedLine = Caret.Line;
 
-            ScrollToLine(Caret.Line, 2);
+            if (!SuppressScrollOnCaretMove)
+                ScrollToLine(Caret.Line, 2);
 
             Dispatcher.UIThread.InvokeAsync(() =>
             {
