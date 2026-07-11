@@ -778,7 +778,8 @@ namespace AvaloniaEdit.Rendering
                 // update all visual top values (building the line might have changed visual top of other lines due to word wrapping)
                 foreach (var line in _allVisualLines)
                 {
-                    line.VisualTop = _heightTree.GetVisualPosition(line.FirstDocumentLine);
+                    // VisualTop は DocumentTopOffset 込みの座標系（CreateAndMeasureVisualLines と同一）で統一する
+                    line.VisualTop = _heightTree.GetVisualPosition(line.FirstDocumentLine) + _documentTopOffset;
                 }
             }
             return l;
