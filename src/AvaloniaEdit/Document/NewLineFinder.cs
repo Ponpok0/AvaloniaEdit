@@ -139,6 +139,13 @@ namespace AvaloniaEdit.Document
         }
 
         /// <summary>
+        /// 改行を 1 つも含まない文書へ改行を挿入するときに使う既定の改行シーケンス。
+        /// 既定は <see cref="Environment.NewLine"/> だが、文書の改行コードを
+        /// アプリ側で統一したい場合はホストアプリが起動時に差し替える。
+        /// </summary>
+        public static string DefaultNewLine { get; set; } = Environment.NewLine;
+
+        /// <summary>
         /// Gets the newline sequence used in the document at the specified line.
         /// </summary>
         public static string GetNewLineFromDocument(IDocument document, int lineNumber)
@@ -150,7 +157,11 @@ namespace AvaloniaEdit.Document
                 // from the previous line
                 line = line.PreviousLine;
                 if (line == null)
-                    return Environment.NewLine;
+                {
+                    // 文書に改行が 1 つも無い（新規タブ等）。OS 既定ではなくホストの指定を使う
+                    var fallback = DefaultNewLine;
+                    return IsNewLine(fallback) ? fallback : Environment.NewLine;
+                }
             }
             return document.GetText(line.Offset + line.Length, line.DelimiterLength);
         }
