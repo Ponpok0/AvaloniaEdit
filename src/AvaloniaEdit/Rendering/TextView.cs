@@ -1093,6 +1093,9 @@ namespace AvaloniaEdit.Rendering
             TextLineBreak lastLineBreak = null;
             var textOffset = 0;
             var textLines = new List<TextLine>();
+            // 選択前景色版を同条件で再フォーマットするため、ループで書き換わる段落状態を控えておく
+            var initialIndent = paragraphProperties.indent;
+            var initialFirstLineInParagraph = paragraphProperties.firstLineInParagraph;
 
             while (textOffset <= visualLine.VisualLengthWithEndOfLineMarker)
             {
@@ -1135,8 +1138,74 @@ namespace AvaloniaEdit.Rendering
                 lastLineBreak = textLine.TextLineBreak;
             }
             visualLine.SetTextLines(textLines);
+
+            if (visualLine.HasSelectionForeground)
+            {
+                paragraphProperties.indent = initialIndent;
+                paragraphProperties.firstLineInParagraph = initialFirstLineInParagraph;
+                BuildSelectionTextLines(visualLine, textSource, paragraphProperties, availableSize);
+            }
+
             _heightTree.SetHeight(visualLine.FirstDocumentLine, visualLine.Height);
             return visualLine;
+        }
+
+        /// <summary>
+        /// 選択前景色を全要素へ一律適用した TextLine 群を追加生成する。
+        /// 一律適用は要素分割を伴わないためラン境界が通常版と一致し、折り返し位置も必ず一致する。
+        /// 生成物は <see cref="VisualLineDrawingVisual"/> が選択範囲でクリップして上書き描画する。
+        /// </summary>
+        private void BuildSelectionTextLines(VisualLine visualLine,
+                                             VisualLineTextSource textSource,
+                                             VisualLineTextParagraphProperties paragraphProperties,
+                                             Size availableSize)
+        {
+            var elements = visualLine.Elements;
+            var savedBrushes = new IBrush[elements.Count];
+            for (var i = 0; i < elements.Count; i++)
+            {
+                savedBrushes[i] = elements[i].TextRunProperties.ForegroundBrush;
+                elements[i].TextRunProperties.SetForegroundBrush(visualLine.SelectionForegroundBrush);
+            }
+            textSource.SuppressInlineObjectRegistration = true;
+            try
+            {
+                TextLineBreak lastLineBreak = null;
+                var textOffset = 0;
+                var textLines = new List<TextLine>();
+
+                // 1 周目にある折り返しインデントの計算をここでは行わない。
+                // firstLineInParagraph は既定 false のまま誰も true にしないため 1 周目の
+                // 計算ブロック自体が到達不能で、indent は常に 0 になる。加えて Avalonia の
+                // TextFormatter は Indent も FirstLineInParagraph も参照していない。
+                // 将来どちらかが有効になったら 1 周目のループ本体を共通化すること。
+                while (textOffset <= visualLine.VisualLengthWithEndOfLineMarker)
+                {
+                    var textLine = _formatter.FormatLine(
+                        textSource,
+                        textOffset,
+                        availableSize.Width,
+                        paragraphProperties,
+                        lastLineBreak
+                    );
+
+                    textLines.Add(textLine);
+                    textOffset += textLine.Length;
+
+                    if (textOffset >= visualLine.VisualLengthWithEndOfLineMarker)
+                        break;
+
+                    lastLineBreak = textLine.TextLineBreak;
+                }
+
+                visualLine.SetSelectionTextLines(textLines);
+            }
+            finally
+            {
+                textSource.SuppressInlineObjectRegistration = false;
+                for (var i = 0; i < elements.Count; i++)
+                    elements[i].TextRunProperties.SetForegroundBrush(savedBrushes[i]);
+            }
         }
 
         private static int GetIndentationVisualColumn(VisualLine visualLine)

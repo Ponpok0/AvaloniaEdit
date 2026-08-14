@@ -40,6 +40,13 @@ namespace AvaloniaEdit.Rendering
 		public TextDocument Document { get; set; }
 		public TextRunProperties GlobalTextRunProperties { get; set; }
 
+		/// <summary>
+		/// 選択前景色版の TextLine を追加生成する 2 周目のフォーマットで true にする。
+		/// InlineObjectRun は 1 周目で既に TextView へ登録済みのため、
+		/// 2 周目で再登録すると同じ Control が二重に配置される。
+		/// </summary>
+		public bool SuppressInlineObjectRegistration { get; set; }
+
 		public TextRun GetTextRun(int textSourceCharacterIndex)
 		{
 			try {
@@ -54,7 +61,7 @@ namespace AvaloniaEdit.Rendering
 							throw new ArgumentException("The returned TextRun must not have length 0.", element.GetType().Name + ".Length");
 						if (relativeOffset + run.Length > element.VisualLength)
 							throw new ArgumentException("The returned TextRun is too long.", element.GetType().Name + ".CreateTextRun");
-						if (run is InlineObjectRun inlineRun) {
+						if (run is InlineObjectRun inlineRun && !SuppressInlineObjectRegistration) {
 							inlineRun.VisualLine = VisualLine;
 							VisualLine.HasInlineObjects = true;
 							TextView.AddInlineObject(inlineRun);

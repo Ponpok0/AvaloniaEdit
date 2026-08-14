@@ -312,6 +312,52 @@ namespace AvaloniaEdit.Rendering
                 Height += Math.Max(line.Height, defaultLineHeight);
         }
 
+        #region Selection foreground overlay
+        // 選択範囲の前景色は VisualLineElement を選択境界で分割して実現していたが、
+        // Avalonia の折り返し計算は TextRun ごとに LineBreakEnumerator を回すため
+        // （TextFormatterImpl.PerformTextWrapping）、選択端が折り返し位置と一致すると
+        // 折り返しが手前へ後退する。選択端はドラッグ中に動くので、その行だけ折り返しが
+        // 出たり戻ったりしてチラつく。
+        // そこで分割はやめ、全要素へ一律に選択前景色を適用した TextLine 群を別に作り、
+        // 選択範囲でクリップして上書き描画する。一律適用は要素分割を伴わないので
+        // ラン境界が通常版と完全に一致し、折り返し位置もグリフ位置も必ず一致する。
+
+        private List<(int Start, int End)> _selectionForegroundRanges;
+        private IBrush _selectionForegroundBrush;
+        private ReadOnlyCollection<TextLine> _selectionTextLines;
+
+        /// <summary>選択前景色の上書き描画が要求されているか。</summary>
+        internal bool HasSelectionForeground => _selectionForegroundRanges != null;
+
+        /// <summary>選択前景色。<see cref="HasSelectionForeground"/> が true のときのみ有効。</summary>
+        internal IBrush SelectionForegroundBrush => _selectionForegroundBrush;
+
+        /// <summary>選択前景色を適用する可視列範囲。終端は int.MaxValue になりうる。</summary>
+        internal IReadOnlyList<(int Start, int End)> SelectionForegroundRanges
+            => _selectionForegroundRanges ?? (IReadOnlyList<(int Start, int End)>)Array.Empty<(int Start, int End)>();
+
+        /// <summary>選択前景色を一律適用して生成した TextLine 群。未生成なら null。</summary>
+        internal ReadOnlyCollection<TextLine> SelectionTextLines => _selectionTextLines;
+
+        /// <summary>
+        /// 選択前景色を適用する可視列範囲を登録する。行変換フェーズからのみ呼べる。
+        /// </summary>
+        internal void AddSelectionForegroundRange(int startVisualColumn, int endVisualColumn, IBrush brush)
+        {
+            if (_phase != LifetimePhase.Transforming)
+                throw new InvalidOperationException("This method may only be called by line transformers.");
+            if (brush == null || endVisualColumn <= startVisualColumn)
+                return;
+            _selectionForegroundBrush = brush;
+            (_selectionForegroundRanges ??= new List<(int, int)>()).Add((startVisualColumn, endVisualColumn));
+        }
+
+        internal void SetSelectionTextLines(List<TextLine> textLines)
+        {
+            _selectionTextLines = new ReadOnlyCollection<TextLine>(textLines);
+        }
+        #endregion
+
         /// <summary>
         /// Gets the visual column from a document offset relative to the first line start.
         /// </summary>
@@ -833,6 +879,68 @@ namespace AvaloniaEdit.Rendering
                 double lineHeight = Math.Max(textHeight, defaultLineHeight);
                 double textOffset = (lineHeight - textHeight) / 2;
                 textLine.Draw(context, new Point(0, pos + textOffset));
+                pos += lineHeight;
+            }
+
+            DrawSelectionForeground(context);
+        }
+
+        /// <summary>
+        /// 選択範囲だけを選択前景色版の TextLine で上書き描画する。
+        /// 通常版とラン構造が同一なのでグリフ位置は完全に一致し、クリップ矩形の内側だけ色が変わる。
+        /// </summary>
+        private void DrawSelectionForeground(DrawingContext context)
+        {
+            var selectionTextLines = VisualLine.SelectionTextLines;
+            var ranges = VisualLine.SelectionForegroundRanges;
+            if (selectionTextLines == null || ranges.Count == 0)
+                return;
+
+            var textLines = VisualLine.TextLines;
+            // 折り返し数が食い違うことは設計上ないが、食い違ったら位置がずれるので描画しない
+            if (selectionTextLines.Count != textLines.Count)
+                return;
+
+            double pos = 0;
+            double defaultLineHeight = VisualLine.TextView.DefaultLineHeight;
+            var visualStartCol = 0;
+
+            for (var i = 0; i < textLines.Count; i++)
+            {
+                var textLine = textLines[i];
+                double textHeight = textLine.Height;
+                double lineHeight = Math.Max(textHeight, defaultLineHeight);
+                double textOffset = (lineHeight - textHeight) / 2;
+
+                var visualEndCol = visualStartCol + textLine.Length;
+                if (i == textLines.Count - 1)
+                    visualEndCol -= 1; // 末尾の TextEndOfParagraph の 1 文字ぶん
+                else
+                    visualEndCol -= textLine.TrailingWhitespaceLength;
+
+                foreach (var (rangeStart, rangeEnd) in ranges)
+                {
+                    var start = Math.Max(rangeStart, visualStartCol);
+                    var end = Math.Min(rangeEnd, visualEndCol);
+                    if (end <= start)
+                        continue;
+
+                    // 双方向テキストでは 1 範囲が複数矩形に割れる
+                    foreach (var bounds in textLine.GetTextBounds(start, end - start))
+                    {
+                        var left = Math.Min(bounds.Rectangle.Left, bounds.Rectangle.Right);
+                        var width = Math.Abs(bounds.Rectangle.Right - bounds.Rectangle.Left);
+                        if (width <= 0)
+                            continue;
+
+                        using (context.PushClip(new Rect(left, pos, width, lineHeight)))
+                        {
+                            selectionTextLines[i].Draw(context, new Point(0, pos + textOffset));
+                        }
+                    }
+                }
+
+                visualStartCol += textLine.Length;
                 pos += lineHeight;
             }
         }

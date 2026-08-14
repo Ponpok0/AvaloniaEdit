@@ -59,12 +59,13 @@ namespace AvaloniaEdit.Editing
                 else
                     endColumn = context.VisualLine.ValidateVisualColumn(segment.EndOffset, segment.EndVisualColumn, _textArea.Selection.EnableVirtualSpace);
 
-                ChangeVisualElements(
-                    startColumn, endColumn,
-                    element =>
-                    {
-                        element.TextRunProperties.SetForegroundBrush(_textArea.SelectionForeground);
-                    });
+                // ここで ChangeVisualElements() により選択境界で要素を分割すると、
+                // Avalonia の折り返し計算が TextRun 単位で行われるせいで
+                // 選択端の位置に応じて折り返し位置が変わってしまう（ドラッグ中のチラツキの原因）。
+                // 分割は行わず範囲だけ記録し、TextView が生成する選択前景色版の
+                // TextLine をこの範囲でクリップして上書き描画する。
+                context.VisualLine.AddSelectionForegroundRange(
+                    startColumn, endColumn, _textArea.SelectionForeground);
             }
         }
     }
