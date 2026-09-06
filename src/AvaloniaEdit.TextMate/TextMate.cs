@@ -52,6 +52,9 @@ namespace AvaloniaEdit.TextMate
             private TextMateColoringTransformer _transformer;
             private readonly bool _ownsTransformer;
             private ReadOnlyDictionary<string, string> _themeColorsDictionary;
+            // 直近に適用した生テーマ。前景色の上書きを作り直すのに要る
+            private IRawTheme _rawTheme;
+            private List<KeyValuePair<string, string>> _foregroundOverrides;
             public IRegistryOptions RegistryOptions { get; }
             public TextEditorModel EditorModel { get { return Volatile.Read(ref _editorModel); } }
 
@@ -211,9 +214,12 @@ namespace AvaloniaEdit.TextMate
                     }
 
                     _textMateRegistry.SetTheme(theme);
+                    _rawTheme = theme;
 
                     var registryTheme = _textMateRegistry.GetTheme();
-                    _transformer.SetTheme(registryTheme);
+                    // 前景色の上書きが残っていれば引き継ぐ。テーマを切り替えるたびに
+                    // 呼び出し側が付け直さなくて済むようにするため
+                    _transformer.SetTheme(BuildTransformerTheme(registryTheme));
 
                     _tmModel?.InvalidateLine(0);
 
@@ -227,6 +233,56 @@ namespace AvaloniaEdit.TextMate
                 }
 
                 appliedTheme?.Invoke(this, this);
+            }
+
+            /// <summary>
+            /// 指定スコープの前景色だけを差し替える。書体・背景色とトークナイズ結果は変わらない。
+            /// </summary>
+            /// <remarks>
+            /// <see cref="SetTheme"/> と違い Registry のテーマには触れない。トークンはスコープ列だけを
+            /// 持ち色を持たないため（色は描画時に Theme.Match で決まる）、色の差し替えに再トークナイズは
+            /// 要らない。ここで InvalidateLine(0) を呼ぶと文書全体の再トークナイズが走ってしまう。
+            /// </remarks>
+            /// <param name="overrides">
+            /// スコープ名と "#RRGGBB" 形式の色の組。null または空なら上書きを解除して元のテーマに戻す。
+            /// </param>
+            public void SetForegroundOverrides(IReadOnlyList<KeyValuePair<string, string>> overrides)
+            {
+                ThrowIfDisposed();
+
+                lock (_lock)
+                {
+                    ThrowIfDisposed();
+
+                    if (_textMateRegistry == null || _transformer == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"{nameof(TextMate)} is not initialized. You must call {nameof(TextMate)}.{nameof(InstallTextMate)} before using this feature.");
+                    }
+
+                    _foregroundOverrides = overrides is { Count: > 0 }
+                        ? new List<KeyValuePair<string, string>>(overrides)
+                        : null;
+
+                    _transformer.SetTheme(BuildTransformerTheme(_textMateRegistry.GetTheme()));
+                }
+
+                // Redraw outside lock, same as SetGrammar.
+                _editor.TextArea.TextView.Redraw();
+            }
+
+            /// <summary>
+            /// transformer に渡す Theme を作る。上書きが無ければ <paramref name="registryTheme"/> を
+            /// そのまま返すため、参照比較で現行経路と等価であることを担保できる。
+            /// </summary>
+            private Theme BuildTransformerTheme(Theme registryTheme)
+            {
+                if (_foregroundOverrides is null || _rawTheme is null) return registryTheme;
+
+                var overlaid = ForegroundOverrideTheme.Create(_rawTheme, _foregroundOverrides);
+                if (ReferenceEquals(overlaid, _rawTheme)) return registryTheme;
+
+                return Theme.CreateFromRawTheme(overlaid, RegistryOptions);
             }
 
             /// <summary>
@@ -286,6 +342,8 @@ namespace AvaloniaEdit.TextMate
 
                     _grammar = null;
                     _themeColorsDictionary = null;
+                    _rawTheme = null;
+                    _foregroundOverrides = null;
                     _exceptionHandler = null;
 
                     // Sever delegate chains to prevent subscribers (e.g., ViewModels) from
