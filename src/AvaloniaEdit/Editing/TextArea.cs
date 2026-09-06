@@ -331,6 +331,9 @@ namespace AvaloniaEdit.Editing
             // in the new document (e.g. if new document is shorter than the old document).
             Caret.Location = new TextLocation(1, 1);
             ClearSelection();
+            // preedit の位置情報は差し替え前の document のもの。持ち越すと、次の
+            // 変換更新が新しい document の無関係な範囲を削ってしまう
+            _imClient.DetachPreedit(oldValue);
             DocumentChanged?.Invoke(this, new DocumentChangedEventArgs(oldValue, newValue));
             //CommandManager.InvalidateRequerySuggested();
         }
@@ -1236,6 +1239,8 @@ namespace AvaloniaEdit.Editing
             private TextArea _textArea;
             private int _preeditOffset = -1;
             private int _preeditLength;
+            /// <summary>_preeditOffset / _preeditLength が指している document。</summary>
+            private TextDocument _preeditDocument;
 
             public int PreeditOffset => _preeditOffset;
             public int PreeditLength => _preeditLength;
@@ -1350,11 +1355,52 @@ namespace AvaloniaEdit.Editing
                 RaiseSelectionChanged();
             }
 
+            /// <summary>
+            /// 進行中の preedit の位置情報を捨てる。
+            /// 差し替え前の offset / length は新しい document では無意味で、
+            /// そのまま次の更新で Remove すると無関係な本文を削ってしまう。
+            /// </summary>
+            internal void ResetPreeditState()
+            {
+                _preeditDocument = null;
+                _preeditOffset = -1;
+                _preeditLength = 0;
+            }
+
+            /// <summary>
+            /// document の差し替えで置き去りになる変換中の文字列を、元の document から取り除く。
+            /// 取り除く先を引数で受けるのは、呼ばれる時点で TextArea.Document が
+            /// すでに新しい document を指しているため。
+            /// </summary>
+            internal void DetachPreedit(TextDocument previousDocument)
+            {
+                if (previousDocument != null && ReferenceEquals(_preeditDocument, previousDocument)
+                    && _preeditLength > 0 && _preeditOffset >= 0
+                    && _preeditOffset + _preeditLength <= previousDocument.TextLength)
+                {
+                    previousDocument.UndoStack.SuppressRecording = true;
+                    try
+                    {
+                        previousDocument.Remove(_preeditOffset, _preeditLength);
+                    }
+                    finally
+                    {
+                        previousDocument.UndoStack.SuppressRecording = false;
+                    }
+                }
+
+                ResetPreeditState();
+            }
+
             public override void SetPreeditText(string text)
             {
                 if (_textArea == null) return;
                 var doc = _textArea.Document;
                 if (doc == null) return;
+
+                // 位置情報を持っている document と現在の document が違うなら、
+                // その位置は現在の本文を指していない
+                if (!ReferenceEquals(_preeditDocument, doc)) ResetPreeditState();
 
                 doc.UndoStack.SuppressRecording = true;
                 try
@@ -1370,6 +1416,7 @@ namespace AvaloniaEdit.Editing
                     // 新しい preedit テキストを挿入
                     if (!string.IsNullOrEmpty(text))
                     {
+                        _preeditDocument = doc;
                         _preeditOffset = _textArea.Caret.Offset;
                         _preeditLength = text.Length;
                         doc.Insert(_preeditOffset, text);
@@ -1377,8 +1424,7 @@ namespace AvaloniaEdit.Editing
                     }
                     else
                     {
-                        _preeditOffset = -1;
-                        _preeditLength = 0;
+                        ResetPreeditState();
                     }
                 }
                 finally
