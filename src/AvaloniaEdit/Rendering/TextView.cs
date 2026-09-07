@@ -1160,13 +1160,11 @@ namespace AvaloniaEdit.Rendering
                                              VisualLineTextParagraphProperties paragraphProperties,
                                              Size availableSize)
         {
-            var elements = visualLine.Elements;
-            var savedBrushes = new IBrush[elements.Count];
-            for (var i = 0; i < elements.Count; i++)
-            {
-                savedBrushes[i] = elements[i].TextRunProperties.ForegroundBrush;
-                elements[i].TextRunProperties.SetForegroundBrush(visualLine.SelectionForegroundBrush);
-            }
+            // 要素のプロパティは書き換えない。整形済みの TextRun はそのインスタンスを
+            // 参照で保持するため、後で色を戻すと生成済みの選択色版 TextLine まで元の色に
+            // 戻ってしまう（通常版と選択色版が 1 個のプロパティを共有する形になる）。
+            // 代わりにテキストソース側で run ごとに専用のプロパティを作らせる
+            textSource.SelectionForegroundOverride = visualLine.SelectionForegroundBrush;
             textSource.SuppressInlineObjectRegistration = true;
             try
             {
@@ -1203,8 +1201,7 @@ namespace AvaloniaEdit.Rendering
             finally
             {
                 textSource.SuppressInlineObjectRegistration = false;
-                for (var i = 0; i < elements.Count; i++)
-                    elements[i].TextRunProperties.SetForegroundBrush(savedBrushes[i]);
+                textSource.SelectionForegroundOverride = null;
             }
         }
 

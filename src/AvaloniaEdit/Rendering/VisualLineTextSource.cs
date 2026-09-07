@@ -18,6 +18,7 @@
 
 using System;
 using System.Diagnostics;
+using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Utils;
@@ -47,6 +48,20 @@ namespace AvaloniaEdit.Rendering
 		/// </summary>
 		public bool SuppressInlineObjectRegistration { get; set; }
 
+		/// <summary>
+		/// 非 null のとき、返す TextRun の前景色をこの色で差し替える。
+		/// 選択前景色版の TextLine を作る 2 周目のフォーマットで設定する。
+		/// </summary>
+		/// <remarks>
+		/// 要素の <see cref="VisualLineElementTextRunProperties"/> を書き換えて整形し、
+		/// 後で元に戻す方式は使えない。整形済みの TextRun はそのインスタンスを参照で
+		/// 保持しており、色を戻すと生成済みの TextLine まで元の色に戻ってしまう
+		/// （通常版と選択色版が 1 個のプロパティを共有することになる）。
+		/// run ごとに専用のプロパティを作れば、2 つの TextLine セットは互いに
+		/// 独立した色を持てる。
+		/// </remarks>
+		public IBrush SelectionForegroundOverride { get; set; }
+
 		public TextRun GetTextRun(int textSourceCharacterIndex)
 		{
 			try {
@@ -66,7 +81,7 @@ namespace AvaloniaEdit.Rendering
 							VisualLine.HasInlineObjects = true;
 							TextView.AddInlineObject(inlineRun);
 						}
-						return run;
+						return ApplySelectionForeground(run);
 					}
 				}
 				if (TextView.Options.ShowEndOfLine && textSourceCharacterIndex == VisualLine.VisualLength) {
@@ -78,6 +93,34 @@ namespace AvaloniaEdit.Rendering
 				throw;
 			}
 		}
+
+        /// <summary>
+        /// <see cref="SelectionForegroundOverride"/> が設定されていれば、前景色だけを
+        /// 差し替えた同内容の run を作り直して返す。
+        /// </summary>
+        /// <remarks>
+        /// 差し替えられるのは <see cref="TextCharacters"/> だけ。整形済みテキストを描く
+        /// 要素（折り畳みマーカー等）とインラインオブジェクトは自前で描画するため
+        /// 前景色を外から与えられず、素通しにする。
+        /// </remarks>
+        private TextRun ApplySelectionForeground(TextRun run)
+        {
+            if (SelectionForegroundOverride == null || run is not TextCharacters characters)
+                return run;
+
+            var source = characters.Properties;
+            var recolored = new GenericTextRunProperties(
+                source.Typeface,
+                source.FontRenderingEmSize,
+                source.TextDecorations,
+                SelectionForegroundOverride,
+                source.BackgroundBrush,
+                source.BaselineAlignment,
+                source.CultureInfo,
+                source.FontFeatures);
+
+            return new TextCharacters(characters.Text, recolored);
+        }
 
         private TextRun CreateTextRunForNewLine()
         {
